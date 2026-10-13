@@ -1,0 +1,7 @@
+# Python >= 3.10. Offline planning/tests need only the standard library.
+# Live COM console, VISA instruments, optional wired/Wi-Fi SSH:
+pyserial>=3.5
+pyvisa>=1.13
+# Optional VXI-11/TCPIP backend; 86100C SICL/LAN requires Keysight IO Libraries.
+pyvisa-py>=0.7
+paramiko>=3.0
