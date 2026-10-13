@@ -1,0 +1,22 @@
+# Local builds and generated experiment/simulation outputs
+/build*/
+/pi-build*/
+/pi-demo*/
+/pi-preview*/
+/pi-scan*/
+/test-output/
+Data_*.csv
+Data_*.csv.metadata.txt
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.pdb
+.DS_Store
+Thumbs.db

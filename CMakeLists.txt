@@ -57,5 +57,12 @@ if(BUILD_TESTING)
         file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/test-output/simulation)
         add_test(NAME simulation_startup_and_loop COMMAND PhaseStabilization ${CMAKE_CURRENT_SOURCE_DIR}/config.txt --simulation-seconds 1)
         set_tests_properties(simulation_startup_and_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/test-output/simulation TIMEOUT 45)
+        find_package(Python3 COMPONENTS Interpreter)
+        if(Python3_Interpreter_FOUND)
+            add_test(NAME cli_logging_modes COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_cli.py
+                $<TARGET_FILE:PhaseStabilization> ${CMAKE_CURRENT_SOURCE_DIR}/config.txt)
+            set_tests_properties(cli_logging_modes PROPERTIES TIMEOUT 180)
+        endif()
     endif()
 endif()

@@ -71,6 +71,9 @@ static DiscretePI  g_pi_controller;
 
 // 日志
 static DataLogger g_logger;
+// Keep optional file logging at the application boundary. Control and terminal
+// reports remain active even when no logger streams or writer are started.
+static bool g_logging_enabled = true;
 
 static void PrintStopReport(const char* reason,const MotorStopReport& report) {
     fprintf(stderr,
@@ -135,7 +138,7 @@ static MotorStopReport StopForExit(IHardwareHAL& hal,MotorStopMode mode,
                                    const char* reason) {
     const MotorStopReport report=hal.StopMotion(mode,250);
     PrintStopReport(reason,report);
-    g_logger.LogMotorStopReport(reason,report);
+    if (g_logging_enabled) g_logger.LogMotorStopReport(reason,report);
     return report;
 }
 
@@ -147,25 +150,54 @@ static WorkingPoint g_startup(g_running, SleepMilliseconds);
 // ============================================================================
 int main(int argc, char* argv[]) {
     double simulation_seconds = 0;
+    const char* config_path = "config.txt";
+    bool config_seen = false, simulation_seen = false, log_mode_seen = false;
     if (argc == 2 && !std::strcmp(argv[1], "--help")) {
-        printf("Usage: PhaseStabilization [config.txt] [--simulation-seconds N]\n");
+        printf("Usage: PhaseStabilization [config.txt] [--simulation-seconds N] [--log-mode full|off]\n"
+               "  config.txt: defaults to ./config.txt; options may appear in any order\n"
+               "  --simulation-seconds N: offline only, finite N in (0, 86400]\n"
+               "  --log-mode full: record board data (default; required by Python runners)\n"
+               "  --log-mode off: no board data files or cycle writer; terminal reports remain\n");
         return EXIT_SUCCESS;
     }
-    if (argc != 1 && argc != 2 && argc != 4) {
-        fprintf(stderr,"Invalid arguments; use --help\n"); return EXIT_FAILURE;
-    }
-    if (argc == 4) {
+    for (int i = 1; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "--simulation-seconds")) {
+            if (simulation_seen || i + 1 == argc) {
+                fprintf(stderr,"Missing or duplicate simulation duration; use --help\n");
+                return EXIT_FAILURE;
+            }
+            simulation_seen = true;
 #if USE_REAL_HARDWARE
-        fprintf(stderr,"Simulation duration override requires an offline build\n");
-        return EXIT_FAILURE;
+            fprintf(stderr,"Simulation duration override requires an offline build\n");
+            return EXIT_FAILURE;
 #else
-        char* end=nullptr;
-        simulation_seconds=std::strtod(argv[3],&end);
-        if (std::strcmp(argv[2],"--simulation-seconds") || end==argv[3] || *end ||
-            !std::isfinite(simulation_seconds) || simulation_seconds<=0 || simulation_seconds>86400) {
-            fprintf(stderr,"Invalid simulation duration\n"); return EXIT_FAILURE;
-        }
+            const char* value = argv[++i];
+            char* end=nullptr;
+            simulation_seconds=std::strtod(value,&end);
+            if (end==value || *end || !std::isfinite(simulation_seconds) ||
+                simulation_seconds<=0 || simulation_seconds>86400) {
+                fprintf(stderr,"Invalid simulation duration\n"); return EXIT_FAILURE;
+            }
 #endif
+        } else if (!std::strcmp(argv[i], "--log-mode")) {
+            if (log_mode_seen || i + 1 == argc) {
+                fprintf(stderr,"Missing or duplicate log mode; use --help\n");
+                return EXIT_FAILURE;
+            }
+            log_mode_seen = true;
+            const char* value = argv[++i];
+            if (!std::strcmp(value, "full")) g_logging_enabled = true;
+            else if (!std::strcmp(value, "off")) g_logging_enabled = false;
+            else {
+                fprintf(stderr,"Invalid log mode; expected full or off\n");
+                return EXIT_FAILURE;
+            }
+        } else if (argv[i][0] == '-' || config_seen) {
+            fprintf(stderr,"Invalid arguments; use --help\n"); return EXIT_FAILURE;
+        } else {
+            config_path = argv[i];
+            config_seen = true;
+        }
     }
 
     // ---- 0. 实时提权 ----
@@ -184,12 +216,8 @@ int main(int argc, char* argv[]) {
 #endif
 
     // ---- 1. 加载配置 ----
-    const char* config_path = "config.txt";
-    if (argc >= 2) {
-        config_path = argv[1];
-    }
-
     printf("==========================================\n");
+    printf("[Logging] mode=%s\n", g_logging_enabled ? "full" : "off (terminal only)");
     printf("  %s: PI phase stabilization\n", SOFTWARE_VERSION);
     printf("==========================================\n");
 
@@ -250,15 +278,17 @@ int main(int argc, char* argv[]) {
     int32_t current_phys = g_config.pos_center;
     int32_t last_phys_cmd = g_config.pos_center;
 
-    // 日志 [T1]: 打开失败必须终止 —— 无人值守长测没有日志等于白跑,
-    // 且 fopen 失败后 Log() 全部静默丢弃, 故障不可追溯
+    // In full mode, preserve fatal log-open handling. Off mode never opens
+    // streams, creates metadata, or starts the cycle writer.
     const char* algo_str = "PI";
-    g_logger.SetFlushInterval(g_config.flush_interval);
-    if (g_logger.Open(algo_str, g_config.total_duration_min) != 0) {
-        fprintf(stderr, "FATAL: 日志文件创建失败, 长测无数据, 终止\n");
-        StopForExit(g_hal,MotorStopMode::Immediate,"log_open_failure");
-        g_hal.Release();
-        return EXIT_FAILURE;
+    if (g_logging_enabled) {
+        g_logger.SetFlushInterval(g_config.flush_interval);
+        if (g_logger.Open(algo_str, g_config.total_duration_min) != 0) {
+            fprintf(stderr, "FATAL: 日志文件创建失败, 长测无数据, 终止\n");
+            StopForExit(g_hal,MotorStopMode::Immediate,"log_open_failure");
+            g_hal.Release();
+            return EXIT_FAILURE;
+        }
     }
 
     // ---- 6. 主循环时序锚点 ----
@@ -271,7 +301,7 @@ int main(int argc, char* argv[]) {
     // 归零失败必须终止, 严禁带错位坐标系继续定位。
     // ============================================================================
     const bool startup_ok = g_startup.Establish(g_hal, g_config);
-    if (g_startup.diagnostics.home_report.result !=
+    if (g_logging_enabled && g_startup.diagnostics.home_report.result !=
         HomingExecutionResult::NotAttempted) {
         g_logger.LogHomingReport(g_startup.diagnostics.home_report);
     }
@@ -306,7 +336,8 @@ int main(int argc, char* argv[]) {
 
     g_pi_controller.BumplessTransfer(current_phys, sys_polarity);
 
-    if (!g_logger.OpenDiagnostics(g_config, measured_b0, sys_polarity, +1, config_path)) {
+    if (g_logging_enabled &&
+        !g_logger.OpenDiagnostics(g_config, measured_b0, sys_polarity, +1, config_path)) {
         fprintf(stderr, "FATAL: diagnostic log creation failed\n");
         StopForExit(g_hal,MotorStopMode::Immediate,"diagnostic_log_failure");
         g_hal.Release(); return EXIT_FAILURE;
@@ -452,10 +483,11 @@ int main(int argc, char* argv[]) {
         // Raw position columns are controller proposals,
         // including an inhibited FAULT row.  The diagnostic row explicitly
         // carries proposed, last software-accepted, and driver-reported values.
-        g_logger.LogCycle(elapsed_s,v_phs,temp_c,log_cmd,phys_cmd,state,record);
+        if (g_logging_enabled)
+            g_logger.LogCycle(elapsed_s,v_phs,temp_c,log_cmd,phys_cmd,state,record);
         if (cycle % 20 == 0)
             printf("[%7.2f s] raw V=%+.4f mV command=%d status=%s\n",elapsed_s,double(v_phs),int(last_phys_cmd),PIStatusName(record.status));
-        if (!g_logger.Healthy()) {
+        if (g_logging_enabled && !g_logger.Healthy()) {
             failed = true;
             fprintf(stderr,"FATAL: logging failure\n");
             if (!stop_attempted) {
@@ -504,10 +536,12 @@ int main(int argc, char* argv[]) {
             failed ? "fault_exit" : (g_running ? "duration_complete" : "signal_exit"));
         stop_attempted = true;
     }
-    printf("\n[System] 关闭日志...\n");
-    g_logger.Close();
-    if (!g_logger.Healthy()) {
-        ReportLoggerShutdownFailure(failed, stderr);
+    if (g_logging_enabled) {
+        printf("\n[System] 关闭日志...\n");
+        g_logger.Close();
+        if (!g_logger.Healthy()) {
+            ReportLoggerShutdownFailure(failed, stderr);
+        }
     }
 
     printf("[System] 释放硬件...\n");
