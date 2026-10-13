@@ -1,36 +1,46 @@
 # Phase Stabilization with Discrete PI
 
-本项目包含 **Red Pitaya 上的离散 PI 闭环补偿实现**，以及 **86100C 独立环外测量的实验使用方式**。Red Pitaya 读取相位鉴别器反馈电压，完成 ODL 归零、工作点建立与极性标定，再通过 VSMD 串口命令调整光学延迟线。86100C 独立观察输出端信号；本人当前实验是在仪器上手动查看测量结果。
+本项目用于光纤射频传输链路的相位漂移补偿。Red Pitaya 采集环内鉴相电压，通过离散 PI 控制光学延迟线（ODL），实现归零、工作点建立、极性标定与闭环补偿。86100C 用于输出端独立环外观测，测量结果不参与反馈控制。
 
-用于 PI 的鉴相电压属于**环内反馈**，86100C 对独立输出信号的观测属于**环外测量**。示波器读数不输入 PI，也不参与控制量计算。正式实验可以关闭板端数据记录，直接运行 C++ 程序。
+![系统框图](docs/系统框图.png)
 
-!\[系统框图](docs/系统框图.png)
+## 主要功能
 
+- **自动启动**：ODL 归零、归中、工作点搜索与控制极性标定。
+- **离散 PI 控制**：死区冻结、积分抗饱和反算、绝对位置输出，以及位置和每拍步数限幅。
+- **运行管理**：VSMD 串口控制、异常停机、可选数据记录和正常退出。
 
+## 硬件运行与环外观测
 
-```mermaid
-flowchart LR
-    subgraph Feedback\\\[反馈控制路径：Red Pitaya + ODL]
-        A\\\[相位鉴别器：环内反馈电压] --> B\\\[Red Pitaya ADC 缓冲区均值]
-        B --> C\\\[极性修正与离散 PI]
-        C --> D\\\[绝对目标 / 位置与步数限制 / 防飞车检查]
-        D --> E\\\[VSMD 串口控制]
-        E --> F\\\[光学延迟线 ODL]
-        F --> G\\\[输出端信号]
-        G --> A
-    end
-    G --> H\\\[86100C：独立环外测量分支]
-    H --> I\\\[本人在仪器上手动查看结果]
+板端需要 Linux、支持 C++14 的编译器、CMake，以及 Red Pitaya SDK（`rp.h`、`librp`）。运行前按实际硬件调整 `config.txt` 中的 PI 参数、位置范围和步数限制。
+
+以下命令在仓库根目录执行：
+
+```bash
+cmake -S . -B build-hw -DUSE_REAL_HARDWARE=ON -DBUILD_TESTING=OFF
+cmake --build build-hw --parallel
+sudo env PI_SERIAL_DEVICE=/dev/ttyUSB0 ./build-hw/PhaseStabilization config.txt --log-mode off
 ```
 
-图示表达控制与观测关系，具体实验接线须以实际系统为准。相位与电压的换算需要实验标定；
-# 硬件运行与环外观测
+将 `/dev/ttyUSB0` 替换为实际串口路径。程序完成启动流程后进入 PI 闭环控制，86100C 的测量结果在仪器上手动查看。
 
-Red Pitaya 采集环内相位误差，以 \(20\,\mathrm{Hz}\) 运行 PI 控制；86100C 用于手动观测输出端信号，进行独立环外验证，不参与反馈。
+`--log-mode off` 关闭板端数据文件，仅保留终端状态输出；默认的 `--log-mode full` 保存控制数据与诊断记录。运行时长由 `config.txt` 中的 `TOTAL_DURATION_MIN` 设置，按 `Ctrl+C` 请求停止并退出。
 
-板端需要 Red Pitaya SDK（`rp.h`、`librp`）及相应调度权限。运行前按实际硬件调整 `config.txt` 和串口路径；运行时长由 `TOTAL_DURATION_MIN` 设置，按 `Ctrl+C` 退出。配置与控制逻辑见[设计说明](docs/DESIGN.md)。## 项目结构与使用权限
+## 项目结构
 
-`control/` 实现 PI；`startup/` 建立工作点；`hal/` 提供硬件与仿真接口；`comm/` 解析驱动帧；`utils/` 提供保护和日志；`tools/` 提供可选 PI 自动化与分析；`tests/` 使用合成数据和 mock 验证。
+| 路径 | 功能 |
+|---|---|
+| `main.cpp` | 启动流程、闭环调度与退出处理 |
+| `control/` | 离散 PI 与物理步数限制 |
+| `startup/` | 归零、工作点建立与极性标定 |
+| `hal/` | Red Pitaya 硬件接口与仿真接口 |
+| `comm/` | VSMD 通信帧解析 |
+| `utils/` | 命令审核、运行保护与数据记录 |
+| `tools/` | 可选的实验自动化与数据分析 |
+| `tests/` | 控制逻辑、通信、日志和工具测试 |
 
-没有为整个项目指定开源许可证。公开源码的使用、修改和分发权限需由权利人另行确定；第三方依赖遵循各自声明，见 [依赖说明](THIRD_PARTY_NOTICES.md)。
+配置、控制逻辑与日志格式见[设计说明](docs/DESIGN.md)。自动化测试记录见 [GitHub Actions](https://github.com/yunyunhuaihuai/Phase_Stabilization_PI/actions)。
 
+## 许可证
+
+本仓库暂未指定开源许可证。第三方依赖说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
