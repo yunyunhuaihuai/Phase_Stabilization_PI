@@ -2,7 +2,7 @@
 
 一个用于光电实验的 C++14 控制项目：读取相位鉴别器电压，完成光学延迟线的归零、工作点搜索与极性标定，再通过串口调整延迟线的绝对目标坐标。项目包含离线仿真、运动保护、异步日志和 Python 实验自动化，便于在没有仪器的电脑上审阅和演示。
 
-硬件接口面向 Red Pitaya 与使用 VSMD 协议的步进驱动器。相位鉴别器输出是**环内电压误差**；电压与相位的转换需要实验标定。驱动器内部位置报告不能代替机械编码器或独立链路时延测量。本项目没有给出仪器实测稳定度、机械到位精度或硬实时保证。
+硬件接口面向 Red Pitaya 与使用 VSMD 协议的步进驱动器。相位鉴别器输出是**环外电压误差**；电压与相位的转换需要实验标定。驱动器内部位置报告不能代替机械编码器或独立链路时延测量。本项目没有给出仪器实测稳定度、机械到位精度或硬实时保证。
 
 ```mermaid
 flowchart LR
@@ -15,32 +15,6 @@ flowchart LR
     G --> A
     E --> H[提案 / 接受值 / 驱动报告日志]
 ```
-
-## 离线构建与演示
-
-需要 CMake ≥ 3.16、支持 C++14 的编译器和 Python ≥ 3.10。离线测试只依赖 Python 标准库；画图需要可选的 Matplotlib。
-
-```sh
-cmake -S . -B ../pi-build -DUSE_REAL_HARDWARE=OFF -DBUILD_TESTING=ON
-cmake --build ../pi-build --parallel
-ctest --test-dir ../pi-build --output-on-failure
-python -B -m unittest discover -s tests -p 'test_*.py'
-python -B tools/pi_experiment.py --binary ../pi-build/PhaseStabilization --output-dir ../pi-demo --seconds 5
-```
-
-Windows 的可执行文件名为 `PhaseStabilization.exe`。输出目录必须是新的目录，避免覆盖数据。可选绘图：
-
-```sh
-python -m pip install matplotlib
-python -B tools/pi_experiment.py --binary ../pi-build/PhaseStabilization --output-dir ../pi-demo-plot --seconds 5 --plot
-```
-
-演示仍执行完整的归零、归中、工作点检查与标定。`--seconds` 只缩短闭环运行时间。仿真采用示例增益 0.0025 mV/脉冲、0.04 s 一阶运动响应、150000 脉冲/s 速度上限和 0.05 mV 高斯噪声；演示在标定后注入 5 mV、0.4 Hz 正弦干扰。这些是仿真假设。`--simulation-seconds` 在真实硬件构建中会在初始化前被拒绝。
-
-![示例仿真结果](docs/simulation.png)
-
-上图由本项目新生成的离线演示产生，表示仿真环内电压及命令目标，不是仪器实测结果。对应生成方法和边界见 [设计说明](docs/DESIGN.md)。
-
 ## PI 输出与限幅
 
 PI 计算的是**绝对逻辑目标位置**。每拍先计算经标定极性修正的误差 `e = polarity × (target − voltage)`，再计算 `P = Kp × e`、积分候选 `I + Ki × e × 0.05`。从 `P + I_candidate` 减去上拍逻辑目标得到增量，用于每拍限幅；最终输出仍是绝对目标。
